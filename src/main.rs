@@ -1,11 +1,12 @@
 use anyhow::Result;
 use once_cell::sync::Lazy;
-use std::sync::Mutex;
+use std::sync::{atomic::AtomicU64, Mutex};
 
 use hyper::{
     service::{make_service_fn, service_fn},
     Body, Request, Response, Server,
 };
+
 use prometheus_client::{
     encoding::text::{encode, Encode},
     metrics::family::Family,
@@ -20,7 +21,6 @@ use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     pin::Pin,
     sync::Arc,
-    time::Duration,
 };
 use tokio::signal::unix::{signal, SignalKind};
 use tower::ServiceBuilder;
@@ -37,22 +37,22 @@ use tokio_cron_scheduler::{Job, JobScheduler};
 
 #[derive(Clone, Hash, PartialEq, Eq, Encode)]
 pub struct Labels {
-    pub name: String,
+    pub kind: String,
     pub version: String,
     pub group: String,
 }
 
 #[derive(Default)]
 pub struct Metrics {
-    crds: Family<Labels, Gauge>,
+    crds: Family<Labels, Gauge<f64, AtomicU64>>,
     numcrds: Gauge,
 }
 
 impl Metrics {
-    pub fn set_crd(&self, name: String, version: String, group: String, count: u64) {
+    pub fn set_crd(&self, kind: String, version: String, group: String, count: f64) {
         self.crds
             .get_or_create(&Labels {
-                name,
+                kind,
                 version,
                 group,
             })
@@ -66,11 +66,15 @@ impl Metrics {
 
 static METRICS: Lazy<Mutex<Metrics>> = Lazy::new(|| Mutex::new(Metrics::default()));
 
-fn set_crd(name: String, version: String, group: String, count: u64) {
-    METRICS.lock().unwrap().set_crd(name, version, group, count);
+fn set_crd(kind: String, version: String, group: String, count: f64) {
+    METRICS.lock().unwrap().set_crd(kind, version, group, count);
 }
 
-fn get_crd_clone() -> Family<Labels, Gauge> {
+fn set_numcrds(count: u64) {
+    METRICS.lock().unwrap().set_numcrds(count);
+}
+
+fn get_crd_clone() -> Family<Labels, Gauge<f64, AtomicU64>> {
     METRICS.lock().unwrap().crds.clone()
 }
 
@@ -91,25 +95,16 @@ async fn main() -> Result<()> {
     );
     registry.register("numcrds", "Count of CRDs", Box::new(get_numcrd_clone()));
 
+    info!("Startup");
+    get_cr_definitions().await?;
+    info!("Startup: fetched CustomResourceDefinitions");
+
     let sched = JobScheduler::new().await?;
 
     sched
-        .add(Job::new_one_shot_async(Duration::from_secs(0), |_, _| {
+        .add(Job::new_async("*/10 * * * * *", |_, _| {
             Box::pin(async move {
-                println!("Startup");
-                match get_cr_definitions().await {
-                    Ok(_) => info!("Startup: fetched CustomResourceDefinitions"),
-                    Err(e) => warn!("Startup: cannot fetch CustomResourceDefinitions: {}", e),
-                }
-            })
-        })?)
-        .await
-        .unwrap();
-
-    sched
-        .add(Job::new_async("0 */10 * * * *", |_, _| {
-            Box::pin(async move {
-                println!("I run async every 10 minutes");
+                info!("I run async every 10 seconds");
                 match get_cr_definitions().await {
                     Ok(_) => info!("Cron: fetched CustomResourceDefinitions"),
                     Err(e) => warn!("Cron: cannot fetch CustomResourceDefinitions: {}", e),
@@ -140,52 +135,64 @@ async fn get_cr_definitions() -> Result<()> {
 
     let crdapi: Api<CustomResourceDefinition> = Api::all(client.clone());
     let crdlist = crdapi.list(&Default::default()).await?;
+    let params = ListParams::default().limit(1);
+
+    set_numcrds(crdlist.items.len().clone() as u64);
     for c in crdlist {
         for v in &c.spec.versions {
-            //client.list_api_group_resources(apiversion)
+            if !v.served {
+                continue;
+            }
+            match v.deprecated {
+                Some(deprecated) => {
+                    if deprecated {
+                        continue;
+                    }
+                }
+                None => (),
+            }
 
             let gvk = GroupVersionKind::gvk(
                 c.spec.group.as_str(),
                 v.name.as_str(),
-                (c.spec).names.singular.as_ref().unwrap().as_str(),
+                (c.spec).names.kind.as_str(),
             );
-            let api_resource = ApiResource::from_gvk(&gvk);
+            let api_resource =
+                ApiResource::from_gvk_with_plural(&gvk, (c.spec).names.plural.as_str());
             let api: Api<DynamicObject> = Api::all_with(client.clone(), &api_resource);
-            let params = ListParams::default().limit(1);
-
             match api.list(&params).await {
                 Ok(crd_items) => {
-                    info!(
-                        "Got len when listing {} {} {} : {}",
-                        (c.spec).names.singular.as_ref().unwrap().clone(),
-                        v.name.clone(),
-                        c.spec.group.clone(),
-                        crd_items.items.len()
+                    let mut num_items = crd_items.items.len();
+                    match crd_items.metadata.remaining_item_count {
+                        Some(remaining_item_count) => {
+                            num_items = num_items + remaining_item_count as usize;
+                        }
+                        None => (),
+                    }
+                    set_crd(
+                        format!("{}", (c.spec).names.kind),
+                        format!("{}", v.name),
+                        format!("{}", c.spec.group),
+                        num_items as f64,
                     );
                 }
                 Err(e) => {
                     warn!(
-                        "Got error listing {} {} {} : {}",
+                        "Got error listing {} {} {} : {}\n{:?}",
                         (c.spec).names.singular.as_ref().unwrap().clone(),
                         v.name.clone(),
                         c.spec.group.clone(),
-                        e
-                    )
+                        e,
+                        api
+                    );
+                    set_crd(
+                        (c.spec).names.kind.clone(),
+                        v.name.clone(),
+                        c.spec.group.clone(),
+                        -1.0,
+                    );
                 }
             }
-
-            info!(
-                "{} {} {}",
-                (c.spec).names.singular.as_ref().unwrap().clone(),
-                v.name.clone(),
-                c.spec.group.clone()
-            );
-            set_crd(
-                (c.spec).names.singular.as_ref().unwrap().clone(),
-                v.name.clone(),
-                c.spec.group.clone(),
-                0,
-            );
         }
     }
 

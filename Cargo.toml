@@ -7,7 +7,7 @@ authors = [
 ]
 
 [dependencies]
-kube = { version = "0.76.0", default-features = true, features = ["derive", "runtime", "rustls-tls"] } # Library for talking to Kubernetes API
+kube = { version = "0.76.0", default-features = false, features = ["client", "rustls-tls"] } # Library for talking to Kubernetes API
 tokio = { version = "1.14.0", features = ["full"] }
 tracing = "0.1.29"
 tracing-subscriber = "0.3.3"
