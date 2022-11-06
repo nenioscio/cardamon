@@ -1,5 +1,5 @@
 [package]
-name = "crdmon"
+name = "cardamon"
 version = "0.1.0"
 edition = "2021"
 authors = [
@@ -21,3 +21,5 @@ tokio-cron-scheduler = "*"
 prometheus-client = "0.18.1"
 tower = { version = "0.4.6", features = ["limit"] }
 hyper = { version = "0.14.13", features = ["server", "client", "http1", "stream", "tcp"] }
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+jemallocator = "0.3.2"

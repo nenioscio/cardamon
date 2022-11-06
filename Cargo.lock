@@ -48,6 +48,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec8a7b6a70fde80372154c65702f00a0f56f3e1c36abbc6c440484be248856db"
 
 [[package]]
+name = "cardamon"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "hyper",
+ "k8s-openapi",
+ "kube",
+ "once_cell",
+ "prometheus-client",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-cron-scheduler",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "cc"
 version = "1.0.73"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -100,26 +120,6 @@ name = "core-foundation-sys"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5827cebf4670468b8772dd191856768aedcb1b0278a04f989f7766351917b9dc"
-
-[[package]]
-name = "crdmon"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "futures",
- "hyper",
- "k8s-openapi",
- "kube",
- "once_cell",
- "prometheus-client",
- "serde",
- "serde_json",
- "tokio",
- "tokio-cron-scheduler",
- "tower",
- "tracing",
- "tracing-subscriber",
-]
 
 [[package]]
 name = "cron"
