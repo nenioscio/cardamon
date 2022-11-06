@@ -1,6 +1,7 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
+use futures::lock::Mutex;
 use once_cell::sync::Lazy;
-use std::sync::{atomic::AtomicU64, Mutex};
+use std::{sync::atomic::AtomicU64, time::Duration};
 
 use hyper::{
     service::{make_service_fn, service_fn},
@@ -46,6 +47,7 @@ pub struct Labels {
 pub struct Metrics {
     crds: Family<Labels, Gauge<f64, AtomicU64>>,
     numcrds: Gauge,
+    kube_client: Option<Client>,
 }
 
 impl Metrics {
@@ -59,27 +61,126 @@ impl Metrics {
             .set(count);
     }
 
+    pub async fn init_client(&mut self) -> Result<()> {
+        let config = Config::infer().await?;
+
+        let https = config.rustls_https_connector()?;
+
+        let service = ServiceBuilder::new()
+            .layer(config.base_uri_layer())
+            .option_layer(config.auth_layer()?)
+            .service(
+                hyper::Client::builder()
+                    .pool_idle_timeout(Duration::from_secs(30))
+                    .build(https),
+            );
+        self.kube_client = Some(Client::new(service, config.default_namespace));
+
+        Ok(())
+    }
+
     pub fn set_numcrds(&self, count: u64) {
         self.numcrds.set(count);
+    }
+
+    async fn get_cr_definitions(&self) -> Result<()> {
+        let crdapi: Api<CustomResourceDefinition> =
+            Api::all(self.kube_client.as_ref().unwrap().clone());
+        let crdlist = crdapi.list(&Default::default()).await?;
+        let params = ListParams::default().limit(1);
+
+        self.set_numcrds(crdlist.items.len() as u64);
+        for c in crdlist {
+            for v in &c.spec.versions {
+                if !v.served {
+                    continue;
+                }
+                match v.deprecated {
+                    Some(deprecated) => {
+                        if deprecated {
+                            continue;
+                        }
+                    }
+                    None => (),
+                }
+
+                let gvk = GroupVersionKind::gvk(
+                    c.spec.group.as_str(),
+                    v.name.as_str(),
+                    (c.spec).names.kind.as_str(),
+                );
+                let api_resource =
+                    ApiResource::from_gvk_with_plural(&gvk, (c.spec).names.plural.as_str());
+                let api: Api<DynamicObject> =
+                    Api::all_with(self.kube_client.as_ref().unwrap().clone(), &api_resource);
+                match api.list(&params).await {
+                    Ok(crd_items) => {
+                        let mut num_items = crd_items.items.len();
+                        match crd_items.metadata.remaining_item_count {
+                            Some(remaining_item_count) => {
+                                num_items = num_items + remaining_item_count as usize;
+                            }
+                            None => (),
+                        }
+                        self.set_crd(
+                            (c.spec).names.kind.clone(),
+                            v.name.clone(),
+                            c.spec.group.clone(),
+                            num_items as f64,
+                        );
+                    }
+                    Err(e) => {
+                        match e {
+                            kube::Error::Api(api_error) => {
+                                if api_error.code == 500 {
+                                    warn!(
+                                        // This is an expecte error
+                                        "Got ApiError(500) for listing {} {} {} : {}\n{:?}",
+                                        (c.spec).names.singular.as_ref().unwrap().clone(),
+                                        v.name.clone(),
+                                        c.spec.group.clone(),
+                                        api_error,
+                                        api
+                                    );
+                                    self.set_crd(
+                                        (c.spec).names.kind.clone(),
+                                        v.name.clone(),
+                                        c.spec.group.clone(),
+                                        -1.0,
+                                    );
+                                }
+                            }
+                            _ => bail!(e),
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
 static METRICS: Lazy<Mutex<Metrics>> = Lazy::new(|| Mutex::new(Metrics::default()));
 
-fn set_crd(kind: String, version: String, group: String, count: f64) {
-    METRICS.lock().unwrap().set_crd(kind, version, group, count);
+async fn get_crd_clone() -> Family<Labels, Gauge<f64, AtomicU64>> {
+    METRICS.lock().await.crds.clone()
 }
 
-fn set_numcrds(count: u64) {
-    METRICS.lock().unwrap().set_numcrds(count);
+async fn get_numcrd_clone() -> Gauge {
+    METRICS.lock().await.numcrds.clone()
 }
 
-fn get_crd_clone() -> Family<Labels, Gauge<f64, AtomicU64>> {
-    METRICS.lock().unwrap().crds.clone()
+async fn init_client() -> Result<()> {
+    METRICS.lock().await.init_client().await?;
+
+    Ok(())
 }
 
-fn get_numcrd_clone() -> Gauge {
-    METRICS.lock().unwrap().numcrds.clone()
+async fn get_cr_definitions() -> Result<()> {
+    METRICS.lock().await.get_cr_definitions().await?;
+
+    Ok(())
 }
 
 #[tokio::main]
@@ -91,20 +192,27 @@ async fn main() -> Result<()> {
     registry.register(
         "crd",
         "Count of active CRD objects",
-        Box::new(get_crd_clone()),
+        Box::new(get_crd_clone().await),
     );
-    registry.register("numcrds", "Count of CRDs", Box::new(get_numcrd_clone()));
+    registry.register(
+        "numcrds",
+        "Count of CRDs",
+        Box::new(get_numcrd_clone().await),
+    );
 
     info!("Startup");
+    init_client().await?;
     get_cr_definitions().await?;
     info!("Startup: fetched CustomResourceDefinitions");
 
     let sched = JobScheduler::new().await?;
 
     sched
-        .add(Job::new_async("*/10 * * * * *", |_, _| {
+        .add(Job::new_async("*/10 */1 * * * *", |_, _| {
             Box::pin(async move {
-                info!("I run async every 10 seconds");
+                info!(
+                    "Fetching CustomResourceDefinitions and number of objects async every minute"
+                );
                 match get_cr_definitions().await {
                     Ok(_) => info!("Cron: fetched CustomResourceDefinitions"),
                     Err(e) => warn!("Cron: cannot fetch CustomResourceDefinitions: {}", e),
@@ -119,83 +227,6 @@ async fn main() -> Result<()> {
     sched.start().await?;
 
     start_metrics_server(metrics_addr, registry).await;
-    Ok(())
-}
-
-async fn get_cr_definitions() -> Result<()> {
-    let config = Config::infer().await?;
-
-    let https = config.rustls_https_connector()?;
-
-    let service = ServiceBuilder::new()
-        .layer(config.base_uri_layer())
-        .option_layer(config.auth_layer()?)
-        .service(hyper::Client::builder().build(https));
-    let client: Client = Client::new(service, config.default_namespace);
-
-    let crdapi: Api<CustomResourceDefinition> = Api::all(client.clone());
-    let crdlist = crdapi.list(&Default::default()).await?;
-    let params = ListParams::default().limit(1);
-
-    set_numcrds(crdlist.items.len().clone() as u64);
-    for c in crdlist {
-        for v in &c.spec.versions {
-            if !v.served {
-                continue;
-            }
-            match v.deprecated {
-                Some(deprecated) => {
-                    if deprecated {
-                        continue;
-                    }
-                }
-                None => (),
-            }
-
-            let gvk = GroupVersionKind::gvk(
-                c.spec.group.as_str(),
-                v.name.as_str(),
-                (c.spec).names.kind.as_str(),
-            );
-            let api_resource =
-                ApiResource::from_gvk_with_plural(&gvk, (c.spec).names.plural.as_str());
-            let api: Api<DynamicObject> = Api::all_with(client.clone(), &api_resource);
-            match api.list(&params).await {
-                Ok(crd_items) => {
-                    let mut num_items = crd_items.items.len();
-                    match crd_items.metadata.remaining_item_count {
-                        Some(remaining_item_count) => {
-                            num_items = num_items + remaining_item_count as usize;
-                        }
-                        None => (),
-                    }
-                    set_crd(
-                        format!("{}", (c.spec).names.kind),
-                        format!("{}", v.name),
-                        format!("{}", c.spec.group),
-                        num_items as f64,
-                    );
-                }
-                Err(e) => {
-                    warn!(
-                        "Got error listing {} {} {} : {}\n{:?}",
-                        (c.spec).names.singular.as_ref().unwrap().clone(),
-                        v.name.clone(),
-                        c.spec.group.clone(),
-                        e,
-                        api
-                    );
-                    set_crd(
-                        (c.spec).names.kind.clone(),
-                        v.name.clone(),
-                        c.spec.group.clone(),
-                        -1.0,
-                    );
-                }
-            }
-        }
-    }
-
     Ok(())
 }
 
