@@ -1,7 +1,7 @@
 use anyhow::{bail, Result};
 use futures::lock::Mutex;
 use once_cell::sync::Lazy;
-use std::{sync::atomic::AtomicU64, time::Duration};
+use std::{sync::atomic::AtomicU64, collections::HashMap};
 
 use hyper::{
     service::{make_service_fn, service_fn},
@@ -51,21 +51,38 @@ pub struct Labels {
 }
 
 #[derive(Default)]
-pub struct Metrics {
+pub struct CrdMetrics {
     crds: Family<Labels, Gauge<f64, AtomicU64>>,
     numcrds: Gauge,
     kube_client: Option<Client>,
+    rediscovered: HashMap<Labels, bool>
 }
 
-impl Metrics {
-    pub fn set_crd(&self, kind: String, version: String, group: String, count: f64) {
+impl CrdMetrics {
+    pub fn set_crd(&mut self, kind: String, version: String, group: String, count: f64) {
+        let label = Labels {
+            kind,
+            version,
+            group,
+        };
         self.crds
-            .get_or_create(&Labels {
-                kind,
-                version,
-                group,
-            })
+            .get_or_create(&label)
             .set(count);
+        self.rediscovered.entry(label).and_modify(|v| *v = true).or_insert(true);
+    }
+
+    pub fn reset_discovered(&mut self) {
+        for v in self.rediscovered.values_mut() {
+            *v = false;
+        }
+    }
+
+    pub fn remove_absent(&self) {
+        for (k, v) in &self.rediscovered {
+            if !v {
+                self.crds.remove(&(k.clone()));
+            }
+        }
     }
 
     pub async fn init_client(&mut self) -> Result<()> {
@@ -95,6 +112,7 @@ impl Metrics {
         let crdlist = crdapi.list(&Default::default()).await?;
         self.set_numcrds(crdlist.items.len() as u64);
 
+        self.reset_discovered();
         let params = ListParams::default().limit(1);
         for c in crdlist {
             for v in &c.spec.versions {
@@ -162,12 +180,13 @@ impl Metrics {
                 }
             }
         }
+        self.remove_absent();
 
         Ok(())
     }
 }
 
-static METRICS: Lazy<Mutex<Metrics>> = Lazy::new(|| Mutex::new(Metrics::default()));
+static METRICS: Lazy<Mutex<CrdMetrics>> = Lazy::new(|| Mutex::new(CrdMetrics::default()));
 
 async fn get_crd_clone() -> Family<Labels, Gauge<f64, AtomicU64>> {
     METRICS.lock().await.crds.clone()
@@ -217,7 +236,7 @@ async fn main() -> Result<()> {
         .add(Job::new_async("0 */1 * * * *", |_, _| {
             Box::pin(async move {
                 info!(
-                    "Fetching CustomResourceDefinitions and number of objects async every minute"
+                    "Cron: fetching CustomResourceDefinitions and number of objects"
                 );
                 match get_cr_definitions().await {
                     Ok(_) => info!("Cron: fetched CustomResourceDefinitions"),
