@@ -250,7 +250,7 @@ async fn main() -> Result<()> {
         .unwrap();
 
     // Spawn a server to serve the OpenMetrics endpoint.
-    let metrics_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8000);
+    let metrics_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 8000);
     sched.start().await?;
 
     start_metrics_server(metrics_addr, registry).await;
