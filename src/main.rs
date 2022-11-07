@@ -36,12 +36,12 @@ use kube::{
 };
 use tokio_cron_scheduler::{Job, JobScheduler};
 
-#[cfg(not(target_env = "msvc"))]
-use jemallocator::Jemalloc;
+// #[cfg(not(target_env = "msvc"))]
+// use jemallocator::Jemalloc;
 
-#[cfg(not(target_env = "msvc"))]
-#[global_allocator]
-static GLOBAL: Jemalloc = Jemalloc;
+// #[cfg(not(target_env = "msvc"))]
+// #[global_allocator]
+// static GLOBAL: Jemalloc = Jemalloc;
 
 #[derive(Clone, Hash, PartialEq, Eq, Encode)]
 pub struct Labels {
@@ -78,7 +78,6 @@ impl Metrics {
             .option_layer(config.auth_layer()?)
             .service(
                 hyper::Client::builder()
-                    .pool_idle_timeout(Duration::from_secs(30))
                     .build(https),
             );
         self.kube_client = Some(Client::new(service, config.default_namespace));
@@ -90,13 +89,13 @@ impl Metrics {
         self.numcrds.set(count);
     }
 
-    async fn get_cr_definitions(&self) -> Result<()> {
+    async fn get_cr_definitions(&mut self) -> Result<()> {
         let crdapi: Api<CustomResourceDefinition> =
             Api::all(self.kube_client.as_ref().unwrap().clone());
         let crdlist = crdapi.list(&Default::default()).await?;
-        let params = ListParams::default().limit(1);
-
         self.set_numcrds(crdlist.items.len() as u64);
+
+        let params = ListParams::default().limit(1);
         for c in crdlist {
             for v in &c.spec.versions {
                 if !v.served {
@@ -112,12 +111,12 @@ impl Metrics {
                 }
 
                 let gvk = GroupVersionKind::gvk(
-                    c.spec.group.as_str(),
-                    v.name.as_str(),
-                    (c.spec).names.kind.as_str(),
+                    Box::new(c.spec.group.clone()).as_str(),
+                    Box::new(v.name.clone()).as_str(),
+                    Box::new((c.spec).names.kind.clone()).as_str(),
                 );
                 let api_resource =
-                    ApiResource::from_gvk_with_plural(&gvk, (c.spec).names.plural.as_str());
+                    ApiResource::from_gvk_with_plural(&gvk, Box::new((c.spec).names.plural.clone()).as_str());
                 let api: Api<DynamicObject> =
                     Api::all_with(self.kube_client.as_ref().unwrap().clone(), &api_resource);
                 match api.list(&params).await {
@@ -130,9 +129,9 @@ impl Metrics {
                             None => (),
                         }
                         self.set_crd(
-                            (c.spec).names.kind.clone(),
-                            v.name.clone(),
-                            c.spec.group.clone(),
+                            Box::new((c.spec).names.kind.clone()).to_string(),
+                            Box::new(v.name.clone()).to_string(),
+                            Box::new(c.spec.group.clone()).to_string(),
                             num_items as f64,
                         );
                     }
@@ -150,9 +149,9 @@ impl Metrics {
                                         api
                                     );
                                     self.set_crd(
-                                        (c.spec).names.kind.clone(),
-                                        v.name.clone(),
-                                        c.spec.group.clone(),
+                                        Box::new((c.spec).names.kind.clone()).as_str().to_string(),
+                                        Box::new(v.name.clone()).as_str().to_string(),
+                                        Box::new(c.spec.group.clone()).as_str().to_string(),
                                         -1.0,
                                     );
                                 }
@@ -215,7 +214,7 @@ async fn main() -> Result<()> {
     let sched = JobScheduler::new().await?;
 
     sched
-        .add(Job::new_async("*/10 */1 * * * *", |_, _| {
+        .add(Job::new_async("0 */1 * * * *", |_, _| {
             Box::pin(async move {
                 info!(
                     "Fetching CustomResourceDefinitions and number of objects async every minute"

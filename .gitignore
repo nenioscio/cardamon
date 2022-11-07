@@ -1,3 +1,4 @@
 /target
 vendor
 *bytehound*
+memory-profiling_*.dat
