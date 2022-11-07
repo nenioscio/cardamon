@@ -9,11 +9,13 @@ use hyper::{
 };
 
 use prometheus_client::{
-    encoding::text::{encode, Encode},
+    encoding::text::encode,
+    encoding::Encode,
     metrics::family::Family,
     metrics::gauge::Gauge,
     registry::Registry,
 };
+
 
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use std::{
