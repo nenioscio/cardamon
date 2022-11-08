@@ -108,11 +108,12 @@ impl CrdMetrics {
         self.numcrds.set(count);
     }
 
-    async fn get_cr_definitions(&mut self) -> Result<()> {
+    async fn get_cr_definitions(&mut self) -> Result<u64> {
         let crdapi: Api<CustomResourceDefinition> =
             Api::all(self.kube_client.as_ref().unwrap().clone());
         let crdlist = crdapi.list(&Default::default()).await?;
-        self.set_numcrds(crdlist.items.len() as u64);
+        let num_crds = crdlist.items.len() as u64;
+        self.set_numcrds(num_crds);
 
         self.reset_discovered();
         let params = ListParams::default().limit(1);
@@ -184,7 +185,7 @@ impl CrdMetrics {
         }
         self.remove_absent();
 
-        Ok(())
+        Ok(num_crds)
     }
 }
 
@@ -204,17 +205,15 @@ async fn init_client() -> Result<()> {
     Ok(())
 }
 
-async fn get_cr_definitions() -> Result<()> {
-    METRICS.lock().await.get_cr_definitions().await?;
-
-    Ok(())
+async fn get_cr_definitions() -> Result<u64> {
+    METRICS.lock().await.get_cr_definitions().await
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
-    let mut registry = <Registry>::with_prefix("crdmon");
+    let mut registry = <Registry>::with_prefix("cardamon");
 
     registry.register(
         "crd",
@@ -241,7 +240,7 @@ async fn main() -> Result<()> {
                     "Cron: fetching CustomResourceDefinitions and number of objects"
                 );
                 match get_cr_definitions().await {
-                    Ok(_) => info!("Cron: fetched CustomResourceDefinitions"),
+                    Ok(num_crds) => info!("Cron: fetched {} CustomResourceDefinitions", num_crds),
                     Err(e) => warn!("Cron: cannot fetch CustomResourceDefinitions: {}", e),
                 }
             })
