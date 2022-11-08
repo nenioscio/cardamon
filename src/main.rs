@@ -159,15 +159,20 @@ impl CrdMetrics {
                     Err(e) => {
                         match e {
                             kube::Error::Api(api_error) => {
+                                warn!(
+                                    "Got ApiError({}) for listing {} {} {} : {}",
+                                    api_error.code,
+                                    (c.spec).names.singular.as_ref().unwrap().clone(),
+                                    v.name.clone(),
+                                    c.spec.group.clone(),
+                                    api_error
+                                );
                                 if api_error.code == 500 {
                                     warn!(
-                                        // This is an expecte error
-                                        "Got ApiError(500) for listing {} {} {} : {}\n{:?}",
+                                        "Detected API error(500) for CRD::list({} {} {}) reporting with broken metric", 
                                         (c.spec).names.singular.as_ref().unwrap().clone(),
                                         v.name.clone(),
                                         c.spec.group.clone(),
-                                        api_error,
-                                        api
                                     );
                                     self.set_crd(
                                         Box::new((c.spec).names.kind.clone()).as_str().to_string(),

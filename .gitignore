@@ -2,3 +2,4 @@
 vendor
 *bytehound*
 memory-profiling_*.dat
+.cargo/config
