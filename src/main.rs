@@ -1,7 +1,7 @@
 use anyhow::{bail, Result};
 use futures::lock::Mutex;
 use once_cell::sync::Lazy;
-use std::{sync::atomic::AtomicU64, collections::HashMap};
+use std::{collections::HashMap, sync::atomic::AtomicU64};
 
 use hyper::{
     service::{make_service_fn, service_fn},
@@ -9,13 +9,11 @@ use hyper::{
 };
 
 use prometheus_client::{
-    encoding::text::encode,
-    encoding::Encode,
+    encoding::{text::encode, EncodeLabelSet},
     metrics::family::Family,
     metrics::gauge::Gauge,
     registry::Registry,
 };
-
 
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 use std::{
@@ -45,7 +43,7 @@ use tokio_cron_scheduler::{Job, JobScheduler};
 // #[global_allocator]
 // static GLOBAL: Jemalloc = Jemalloc;
 
-#[derive(Clone, Hash, PartialEq, Eq, Encode)]
+#[derive(Clone, Hash, PartialEq, Eq, EncodeLabelSet, Debug)]
 pub struct Labels {
     pub kind: String,
     pub version: String,
@@ -57,7 +55,7 @@ pub struct CrdMetrics {
     crds: Family<Labels, Gauge<f64, AtomicU64>>,
     numcrds: Gauge,
     kube_client: Option<Client>,
-    rediscovered: HashMap<Labels, bool>
+    rediscovered: HashMap<Labels, bool>,
 }
 
 impl CrdMetrics {
@@ -67,10 +65,11 @@ impl CrdMetrics {
             version,
             group,
         };
-        self.crds
-            .get_or_create(&label)
-            .set(count);
-        self.rediscovered.entry(label).and_modify(|v| *v = true).or_insert(true);
+        self.crds.get_or_create(&label).set(count);
+        self.rediscovered
+            .entry(label)
+            .and_modify(|v| *v = true)
+            .or_insert(true);
     }
 
     pub fn reset_discovered(&mut self) {
@@ -95,24 +94,21 @@ impl CrdMetrics {
         let service = ServiceBuilder::new()
             .layer(config.base_uri_layer())
             .option_layer(config.auth_layer()?)
-            .service(
-                hyper::Client::builder()
-                    .build(https),
-            );
+            .service(hyper::Client::builder().build(https));
         self.kube_client = Some(Client::new(service, config.default_namespace));
 
         Ok(())
     }
 
-    pub fn set_numcrds(&self, count: u64) {
+    pub fn set_numcrds(&self, count: i64) {
         self.numcrds.set(count);
     }
 
-    async fn get_cr_definitions(&mut self) -> Result<u64> {
+    async fn get_cr_definitions(&mut self) -> Result<i64> {
         let crdapi: Api<CustomResourceDefinition> =
             Api::all(self.kube_client.as_ref().unwrap().clone());
         let crdlist = crdapi.list(&Default::default()).await?;
-        let num_crds = crdlist.items.len() as u64;
+        let num_crds = crdlist.items.len() as i64;
         self.set_numcrds(num_crds);
 
         self.reset_discovered();
@@ -136,8 +132,10 @@ impl CrdMetrics {
                     Box::new(v.name.clone()).as_str(),
                     Box::new((c.spec).names.kind.clone()).as_str(),
                 );
-                let api_resource =
-                    ApiResource::from_gvk_with_plural(&gvk, Box::new((c.spec).names.plural.clone()).as_str());
+                let api_resource = ApiResource::from_gvk_with_plural(
+                    &gvk,
+                    Box::new((c.spec).names.plural.clone()).as_str(),
+                );
                 let api: Api<DynamicObject> =
                     Api::all_with(self.kube_client.as_ref().unwrap().clone(), &api_resource);
                 match api.list(&params).await {
@@ -156,35 +154,33 @@ impl CrdMetrics {
                             num_items as f64,
                         );
                     }
-                    Err(e) => {
-                        match e {
-                            kube::Error::Api(api_error) => {
+                    Err(e) => match e {
+                        kube::Error::Api(api_error) => {
+                            warn!(
+                                "Got ApiError({}) for listing {} {} {} : {}",
+                                api_error.code,
+                                (c.spec).names.singular.as_ref().unwrap().clone(),
+                                v.name.clone(),
+                                c.spec.group.clone(),
+                                api_error
+                            );
+                            if api_error.code == 500 {
                                 warn!(
-                                    "Got ApiError({}) for listing {} {} {} : {}",
-                                    api_error.code,
-                                    (c.spec).names.singular.as_ref().unwrap().clone(),
-                                    v.name.clone(),
-                                    c.spec.group.clone(),
-                                    api_error
-                                );
-                                if api_error.code == 500 {
-                                    warn!(
                                         "Detected API error(500) for CRD::list({} {} {}) reporting with broken metric", 
                                         (c.spec).names.singular.as_ref().unwrap().clone(),
                                         v.name.clone(),
                                         c.spec.group.clone(),
                                     );
-                                    self.set_crd(
-                                        Box::new((c.spec).names.kind.clone()).as_str().to_string(),
-                                        Box::new(v.name.clone()).as_str().to_string(),
-                                        Box::new(c.spec.group.clone()).as_str().to_string(),
-                                        -1.0,
-                                    );
-                                }
+                                self.set_crd(
+                                    Box::new((c.spec).names.kind.clone()).as_str().to_string(),
+                                    Box::new(v.name.clone()).as_str().to_string(),
+                                    Box::new(c.spec.group.clone()).as_str().to_string(),
+                                    -1.0,
+                                );
                             }
-                            _ => bail!(e),
                         }
-                    }
+                        _ => bail!(e),
+                    },
                 }
             }
         }
@@ -210,7 +206,7 @@ async fn init_client() -> Result<()> {
     Ok(())
 }
 
-async fn get_cr_definitions() -> Result<u64> {
+async fn get_cr_definitions() -> Result<i64> {
     METRICS.lock().await.get_cr_definitions().await
 }
 
@@ -223,12 +219,12 @@ async fn main() -> Result<()> {
     registry.register(
         "crd",
         "Count of active CRD objects",
-        Box::new(get_crd_clone().await),
+        get_crd_clone().await,
     );
     registry.register(
         "numcrds",
         "Count of CRDs",
-        Box::new(get_numcrd_clone().await),
+        get_numcrd_clone().await,
     );
 
     info!("Startup");
@@ -241,9 +237,7 @@ async fn main() -> Result<()> {
     sched
         .add(Job::new_async("0 */1 * * * *", |_, _| {
             Box::pin(async move {
-                info!(
-                    "Cron: fetching CustomResourceDefinitions and number of objects"
-                );
+                info!("Cron: fetching CustomResourceDefinitions and number of objects");
                 match get_cr_definitions().await {
                     Ok(num_crds) => info!("Cron: fetched {} CustomResourceDefinitions", num_crds),
                     Err(e) => warn!("Cron: cannot fetch CustomResourceDefinitions: {}", e),
@@ -291,17 +285,19 @@ pub fn make_handler(
     move |_req: Request<Body>| {
         let reg = registry.clone();
         Box::pin(async move {
-            let mut buf = Vec::new();
-            encode(&mut buf, &reg.clone()).map(|_| {
-                let body = Body::from(buf);
-                Response::builder()
-                    .header(
-                        hyper::header::CONTENT_TYPE,
-                        "application/openmetrics-text; version=1.0.0; charset=utf-8",
-                    )
-                    .body(body)
-                    .unwrap()
-            })
+            let mut buf = String::new();
+            encode(&mut buf, &reg.clone())
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+                .map(|_| {
+                    let body = Body::from(buf);
+                    Response::builder()
+                        .header(
+                            hyper::header::CONTENT_TYPE,
+                            "application/openmetrics-text; version=1.0.0; charset=utf-8",
+                        )
+                        .body(body)
+                        .unwrap()
+                })
         })
     }
 }
