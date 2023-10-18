@@ -16,8 +16,6 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
-    - name: RustUp
-      run: rustup target add x86_64-unknown-linux-musl
     - name: Build
       run: RUSTFLAGS='-C target-feature=+crt-static' cargo build --release --target x86_64-unknown-linux-gnu
     - uses: actions/upload-artifact@v3
