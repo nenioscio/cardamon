@@ -128,13 +128,13 @@ impl CrdMetrics {
                 }
 
                 let gvk = GroupVersionKind::gvk(
-                    Box::new(c.spec.group.clone()).as_str(),
-                    Box::new(v.name.clone()).as_str(),
-                    Box::new((c.spec).names.kind.clone()).as_str(),
+                    c.spec.group.clone().as_str(),
+                    v.name.clone().as_str(),
+                    c.spec.names.kind.clone().as_str(),
                 );
                 let api_resource = ApiResource::from_gvk_with_plural(
                     &gvk,
-                    Box::new((c.spec).names.plural.clone()).as_str(),
+                    c.spec.names.plural.clone().as_str(),
                 );
                 let api: Api<DynamicObject> =
                     Api::all_with(self.kube_client.as_ref().unwrap().clone(), &api_resource);
@@ -148,9 +148,9 @@ impl CrdMetrics {
                             None => (),
                         }
                         self.set_crd(
-                            Box::new((c.spec).names.kind.clone()).to_string(),
-                            Box::new(v.name.clone()).to_string(),
-                            Box::new(c.spec.group.clone()).to_string(),
+                            c.spec.names.kind.clone().to_string(),
+                            v.name.clone().to_string(),
+                            c.spec.group.clone().to_string(),
                             num_items as f64,
                         );
                     }
@@ -159,7 +159,7 @@ impl CrdMetrics {
                             warn!(
                                 "Got ApiError({}) for listing {} {} {} : {}",
                                 api_error.code,
-                                (c.spec).names.singular.as_ref().unwrap().clone(),
+                                c.spec.names.singular.as_ref().unwrap().clone(),
                                 v.name.clone(),
                                 c.spec.group.clone(),
                                 api_error
@@ -167,14 +167,14 @@ impl CrdMetrics {
                             if api_error.code == 500 {
                                 warn!(
                                         "Detected API error(500) for CRD::list({} {} {}) reporting with broken metric", 
-                                        (c.spec).names.singular.as_ref().unwrap().clone(),
+                                        c.spec.names.singular.as_ref().unwrap().clone(),
                                         v.name.clone(),
                                         c.spec.group.clone(),
                                     );
                                 self.set_crd(
-                                    Box::new((c.spec).names.kind.clone()).as_str().to_string(),
-                                    Box::new(v.name.clone()).as_str().to_string(),
-                                    Box::new(c.spec.group.clone()).as_str().to_string(),
+                                    c.spec.names.kind.clone().as_str().to_string(),
+                                    v.name.clone().as_str().to_string(),
+                                    c.spec.group.clone().as_str().to_string(),
                                     -1.0,
                                 );
                             }
