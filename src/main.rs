@@ -24,15 +24,13 @@ use std::{
     sync::Arc,
 };
 use tokio::signal::unix::{signal, SignalKind};
-use tower::ServiceBuilder;
 use tracing::*;
 
 use kube::{
     api::ListParams,
-    client::ConfigExt,
     core::{DynamicObject, GroupVersionKind},
     discovery::ApiResource,
-    Api, Client, Config,
+    Api, Client,
 };
 use tokio_cron_scheduler::{Job, JobScheduler};
 
@@ -87,15 +85,7 @@ impl CrdMetrics {
     }
 
     pub async fn init_client(&mut self) -> Result<()> {
-        let config = Config::infer().await?;
-
-        let https = config.rustls_https_connector()?;
-
-        let service = ServiceBuilder::new()
-            .layer(config.base_uri_layer())
-            .option_layer(config.auth_layer()?)
-            .service(hyper::Client::builder().build(https));
-        self.kube_client = Some(Client::new(service, config.default_namespace));
+        self.kube_client = Some(Client::try_default().await?);
 
         Ok(())
     }
