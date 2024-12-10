@@ -1,7 +1,3 @@
-Sure, I'd be happy to help you create a README for your Rust application repository! Based on the information from your GitHub repository, it looks like your project is a CRD (Custom Resource Definition) monitor implemented in Rust. Here's a draft README for you:
-
----
-
 # Cardamon
 
 !License
@@ -66,7 +62,3 @@ This project is licensed under the MIT License. See the LICENSE file for details
 ## Contact
 
 For any questions or suggestions, please open an issue or contact the repository owner.
-
----
-
-Feel free to customize this README further to better fit your project's specifics and your personal style. Let me know if there's anything else you need!
