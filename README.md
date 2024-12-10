@@ -9,7 +9,7 @@ Sure, I'd be happy to help you create a README for your Rust application reposit
 
 ## Overview
 
-**Cardamon** is a CRD (Custom Resource Definition) monitor implemented in Rust. It is designed to help developers and system administrators monitor and manage Kubernetes CRDs efficiently.
+**Cardamon** is a CRD (Custom Resource Definition) monitor implemented in Rust. It is designed to help developers and system administrators monitor and manage Kubernetes CRDs efficiently. In case a CRD cannot be read correctly, this may suggest either missing permissions or for example broken and misconfigured webhooks.
 
 ## Features
 
