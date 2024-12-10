@@ -8,16 +8,16 @@ authors = [
 
 [dependencies]
 kube = { version = "0.95.0", features = ["client"] } # Library for talking to Kubernetes API
-tokio = { version = "1.21.2", features = ["full"] }
-tracing = "0.1.37"
-tracing-subscriber = "0.3.16"
+tokio = { version = "1.42.0", features = ["full"] }
+tracing = "0.1.41"
+tracing-subscriber = "0.3.19"
 k8s-openapi = { version = "0.23.0", features = ["latest"] } # Kube-rs depends on k8s-openapi
-serde_json = "1.0.87"
-serde = { version = "1.0.147", features = ["derive"] }
-anyhow = "1.0.66"
+serde_json = "1.0.133"
+serde = { version = "1.0.215", features = ["derive"] }
+anyhow = "1.0.94"
 futures = "*"
 once_cell = "*"
 tokio-cron-scheduler = "*"
 prometheus-client = "0.21.2"
 tower = { version = "0.4.13", features = ["limit"] }
-hyper = { version = "0.14.22", features = ["server", "client", "http1", "stream", "tcp"] }
+hyper = { version = "0.14.31", features = ["server", "client", "http1", "stream", "tcp"] }
