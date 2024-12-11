@@ -1,6 +1,6 @@
 # Cardamon
 
-![cardamon logo]([https://github.com/nenioscio/cardamon/blob/7e88ef4396dbbeb806749bfd275c73ffd13fb374/cardmon.png?raw=true])
+![cardamon logo](https://github.com/nenioscio/cardamon/blob/7e88ef4396dbbeb806749bfd275c73ffd13fb374/cardmon.png?raw=true)
 
 ## Overview
 
